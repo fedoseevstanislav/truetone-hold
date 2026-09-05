@@ -17,10 +17,14 @@ build/test-dormant: tests/dormant.m src/truetone-hold.m | build
 build/test-verification: tests/verification.m src/truetone-hold.m | build
 	$(CC) $(CFLAGS) $(FRAMEWORKS) $< -o $@
 
-check: all build/test-dormant build/test-verification
+build/test-transition: tests/transition.m src/truetone-hold.m | build
+	$(CC) $(CFLAGS) $(FRAMEWORKS) $< -o $@
+
+check: all build/test-dormant build/test-verification build/test-transition
 	bash -n install.sh uninstall.sh
 	./build/test-dormant
 	./build/test-verification
+	./build/test-transition
 
 clean:
 	rm -rf build

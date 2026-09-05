@@ -98,10 +98,46 @@ static NSArray<NSNumber *> *watched;
 static id client;
 static IONotificationPortRef powerPort;
 static io_object_t powerNotification;
-static dispatch_source_t pending, termSource, intSource, statusSource;
+static dispatch_source_t pending, transitionGuard, termSource, intSource, statusSource;
 static unsigned long colorEvents;
 static BOOL stopping;
 static void reconcile(void);
+static unsigned long transitionChecks;
+static void stopTransitionGuard(void) {
+    if (transitionGuard) dispatch_source_cancel(transitionGuard);
+    transitionGuard = nil;
+}
+
+// A bounded guard covers the asynchronous macOS gamma reset. It never runs
+// during ordinary open-lid or steady closed-lid use, or without a saved sample.
+static void startTransitionGuard(void) {
+    stopTransitionGuard();
+    if (stopping || !held.count) return;
+    NSArray<NSNumber *> *online = displays();
+    double deadline = NSProcessInfo.processInfo.systemUptime + 1.25;
+    transitionChecks = 0;
+    transitionGuard = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(transitionGuard, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 60),
+                              NSEC_PER_SEC / 60, NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(transitionGuard, ^{
+        @autoreleasepool {
+            if (stopping || lid() != 1 || NSProcessInfo.processInfo.systemUptime >= deadline) {
+                stopTransitionGuard();
+                NSLog(@"Transition guard finished after %lu checks; dormant until next event", transitionChecks);
+                return;
+            }
+            transitionChecks++;
+            for (NSNumber *d in online) {
+                Sample *s = held[key(d.unsignedIntValue)];
+                if (s && !correctionMatches(s, d.unsignedIntValue)) {
+                    CGError result = apply(s, d.unsignedIntValue, YES);
+                    NSLog(@"Transition reset repaired on display %u: %d", d.unsignedIntValue, result);
+                }
+            }
+        }
+    });
+    dispatch_resume(transitionGuard);
+}
 
 static void scheduleReconcile(double delay) {
     if (stopping) return;
@@ -147,8 +183,9 @@ static void powerChanged(void *refcon, io_service_t service, natural_t message, 
             if (pending) dispatch_source_cancel(pending);
             pending = nil;
             reconcile();
-            scheduleReconcile(1.0); // One verification after macOS finishes resetting gamma.
+            startTransitionGuard();
         } else {
+            stopTransitionGuard();
             restore(displays());
             scheduleReconcile(0.3);
         }
@@ -219,6 +256,7 @@ static void subscribe(NSArray<NSNumber *> *online) {
 static void reconcile(void) {
     NSArray<NSNumber *> *online = displays();
     if (!online.count) {
+        stopTransitionGuard();
         unsubscribe();
         unwatchLid();
         [samples removeAllObjects];
@@ -268,11 +306,11 @@ static void displayChanged(CGDirectDisplayID display, CGDisplayChangeSummaryFlag
         @autoreleasepool {
             if (lid() == 1) {
                 // A completed transition can reset gamma after the lid event.
-                // Apply now and verify once after the reset has settled.
+                // Apply now and cover the asynchronous reset briefly.
                 if (pending) dispatch_source_cancel(pending);
                 pending = nil;
                 reconcile();
-                scheduleReconcile(1.0);
+                startTransitionGuard();
             } else {
                 scheduleReconcile(0.3);
             }
@@ -282,6 +320,7 @@ static void displayChanged(CGDirectDisplayID display, CGDisplayChangeSummaryFlag
 
 static void shutdownHelper(void) {
     stopping = YES;
+    stopTransitionGuard();
     if (pending) dispatch_source_cancel(pending);
     CGDisplayRemoveReconfigurationCallback(displayChanged, NULL);
     unsubscribe();
@@ -326,14 +365,14 @@ int main(int argc, char **argv) {
         dispatch_source_set_event_handler(intSource, ^{ shutdownHelper(); });
         statusSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR1, 0, dispatch_get_main_queue());
         dispatch_source_set_event_handler(statusSource, ^{
-            NSLog(@"Status: subscribed=%lu cached=%lu held=%lu colorEvents=%lu pendingTransition=%d",
-                  watched.count, samples.count, held.count, colorEvents, pending != nil);
+            NSLog(@"Status: subscribed=%lu cached=%lu held=%lu colorEvents=%lu pendingTransition=%d guardActive=%d",
+                  watched.count, samples.count, held.count, colorEvents, pending != nil, transitionGuard != nil);
         });
         dispatch_resume(statusSource);
         dispatch_resume(termSource);
         dispatch_resume(intSource);
         reconcile();
-        NSLog(@"Event-driven helper ready; no polling timer");
+        NSLog(@"Event-driven helper ready; bounded guard only during lid transitions");
     }
     dispatch_main();
 }

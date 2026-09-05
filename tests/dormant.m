@@ -19,7 +19,7 @@ int main(void) {
         reconcile();
         assert(client == nil && watched == nil);
         assert(powerPort == NULL && powerNotification == 0);
-        assert(pending == nil);
+        assert(pending == nil && transitionGuard == nil);
         assert(samples.count == 0 && held.count == 0);
         puts("PASS: no external display leaves no color client, lid listener, timer, or cached readings");
     }
