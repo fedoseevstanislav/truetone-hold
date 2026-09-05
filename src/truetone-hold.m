@@ -69,6 +69,22 @@ static CGError apply(Sample*s,CGDirectDisplayID d,BOOL tint){
     }
     return CGSetDisplayTransferByTable(d,s.count,r,g,b);
 }
+// Check the actual output table before a settling pass writes anything.
+static BOOL correctionMatches(Sample *s, CGDirectDisplayID d) {
+    float r[4096], g[4096], b[4096];
+    uint32_t n = 0;
+    if (CGGetDisplayTransferByTable(d, 4096, r, g, b, &n) != kCGErrorSuccess || n != s.count)
+        return NO;
+    const float *baseline[] = {s.r.bytes, s.g.bytes, s.b.bytes};
+    const float *actual[] = {r, g, b};
+    for (int channel = 0; channel < 3; channel++)
+        for (uint32_t i = 0; i < n; i++)
+            if (!isfinite(actual[channel][i]) ||
+                fabs(actual[channel][i] - baseline[channel][i] * [s.gain[channel] floatValue]) > 0.002)
+                return NO;
+    return YES;
+}
+
 static NSArray *displays(void){
     CGDirectDisplayID ds[32];
     uint32_t n=0;
@@ -131,6 +147,7 @@ static void powerChanged(void *refcon, io_service_t service, natural_t message, 
             if (pending) dispatch_source_cancel(pending);
             pending = nil;
             reconcile();
+            scheduleReconcile(1.0); // One verification after macOS finishes resetting gamma.
         } else {
             restore(displays());
             scheduleReconcile(0.3);
@@ -220,9 +237,15 @@ static void reconcile(void) {
         for (NSNumber *d in online) {
             NSString *k = key(d.unsignedIntValue);
             Sample *s = samples[k];
-            if (s && apply(s, d.unsignedIntValue, YES) == kCGErrorSuccess) {
+            if (!s) continue;
+            if (held[k] && correctionMatches(s, d.unsignedIntValue)) {
+                NSLog(@"Verified held correction on display %u; no write needed", d.unsignedIntValue);
+                continue;
+            }
+            BOOL wasHeld = held[k] != nil;
+            if (apply(s, d.unsignedIntValue, YES) == kCGErrorSuccess) {
                 held[k] = s;
-                NSLog(@"Holding display %u until next lid/display event", d.unsignedIntValue);
+                NSLog(@"%@ display %u", wasHeld ? @"Repaired reset correction on" : @"Immediately holding", d.unsignedIntValue);
             }
         }
     } else {
@@ -244,11 +267,12 @@ static void displayChanged(CGDirectDisplayID display, CGDisplayChangeSummaryFlag
     dispatch_async(dispatch_get_main_queue(), ^{
         @autoreleasepool {
             if (lid() == 1) {
-                // A completed display transition can reset gamma after the lid
-                // notification. Reapply immediately, without a settling timer.
+                // A completed transition can reset gamma after the lid event.
+                // Apply now and verify once after the reset has settled.
                 if (pending) dispatch_source_cancel(pending);
                 pending = nil;
                 reconcile();
+                scheduleReconcile(1.0);
             } else {
                 scheduleReconcile(0.3);
             }
@@ -284,6 +308,7 @@ int main(int argc, char **argv) {
                 CGError read = CGGetDisplayTransferByTable(d.unsignedIntValue, 4096, r, g, b, &n);
                 BOOL matches = read == 0 && n == s.count && n &&
                     fabs(b[n-1] - ((const float *)s.b.bytes)[n-1] * [s.gain[2] floatValue]) < 0.002;
+                matches = matches && correctionMatches(s, d.unsignedIntValue);
                 CGError reset = apply(s, d.unsignedIntValue, NO);
                 NSLog(@"Gamma test: write=%d match=%d restore=%d", write, matches, reset);
                 if (write || !matches || reset) return 2;

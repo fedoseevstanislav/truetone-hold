@@ -28,11 +28,11 @@ The helper has **no polling loop and no repeating timer**:
 
 - **No external monitor:** only the macOS display-reconfiguration callback remains registered. The color client and lid listener are released.
 - **External monitor, lid open:** it listens for True Tone `ColorRamp` changes through the private `BrightnessSystemClient` interface and caches the delivered matrix. There is no scheduled sampling.
-- **Lid closes:** an IOKit clamshell notification stops color subscriptions and applies the cached correction immediately, without an intentional delay. Completed display-configuration events reapply it immediately if macOS resets gamma during the transition.
+- **Lid closes:** an IOKit clamshell notification stops color subscriptions and applies the cached correction immediately, without an intentional delay. One verification a second later checks whether macOS reset the output gamma and repairs it only if necessary. Completed display-configuration events do the same.
 - **Lid opens:** it restores the saved gamma and resumes True Tone notifications.
 - **Display configuration changes:** it reconciles connected monitors and restores or reapplies correction as needed.
 
-A coalesced **one-shot** timer allows a short settling delay for open-lid configuration changes only. Lid closure and closed-lid display changes apply the correction immediately. Between events the helper sleeps. A small resident process is needed to receive connection notifications; dormant does not mean unloaded from memory.
+A coalesced **one-shot** timer handles open-lid settling and a single closed-lid verification. Lid closure applies immediately, then verifies once after one second. This is bounded work per transition, not periodic polling. Between events the helper sleeps. A small resident process is needed to receive connection notifications; dormant does not mean unloaded from memory.
 
 The color matrix's row sums describe its effect on neutral white. The helper approximates corresponding encoded RGB gains with an exponent of 1/2.2. It always applies them to the saved baseline, so corrections do not accumulate.
 
@@ -40,9 +40,9 @@ The color matrix's row sums describe its effect on neutral white. The helper app
 
 - This is a white-balance approximation, not colorimetrically exact True Tone. It is unsuitable for color-critical work.
 - The private CoreBrightness read interface may change after a macOS update.
-- macOS notification delivery and display reconfiguration can still produce a brief transition; immediate event handling does not guarantee a flicker-free hardware transition.
+- macOS can overwrite an immediate correction during display reconfiguration. If that happens, warmth returns on the one-second verification. This implementation cannot guarantee an instantaneous, flicker-free transition.
 - The process must observe the lid open before it has a reading to hold. Captures are kept in memory, not persisted across restarts.
-- Other gamma-adjustment applications, HDR behavior, display reconnections, and display-ID changes may affect the result. There is no periodic correction to override changes made by another application. Multiple-display behavior has not been verified.
+- Other gamma-adjustment applications, HDR behavior, display reconnections, and display-ID changes may affect the result. There is no ongoing periodic correction to override changes made by another application. Multiple-display behavior has not been verified.
 - SIGTERM and SIGINT restore gamma; a force kill or crash cannot run cleanup. macOS may reset gamma during a display reconfiguration, but this is not guaranteed.
 - The helper does not keep a sleeping Mac awake.
 
@@ -54,7 +54,7 @@ A brief live gamma write/readback/restore test is available while the lid is ope
 "$HOME/Library/Application Support/TrueToneHold/truetone-hold" --self-test
 ```
 
-This changes display gamma briefly and restores it. Live tests passed gamma write/readback/restoration and delivery of True Tone change notifications. `make check` builds with warnings treated as errors, checks shell syntax, and verifies that the no-display state has no color client, lid listener, or pending timer. A physical lid-close appearance test has not yet been confirmed by the user.
+This changes display gamma briefly and restores it. Live tests passed gamma write/readback/restoration and delivery of True Tone change notifications. `make check` builds with warnings treated as errors, checks shell syntax, and verifies dormant-state cleanup and detection of reset/invalid gamma tables. A physical lid-close appearance test has not yet been confirmed by the user.
 
 Send `SIGUSR1` to the helper for a one-time diagnostic status line (subscription, cache, held-display, notification counts, and pending-transition state). This adds no periodic wakeups.
 
