@@ -54,7 +54,9 @@ A brief live gamma write/readback/restore test is available while the lid is ope
 "$HOME/Library/Application Support/TrueToneHold/truetone-hold" --self-test
 ```
 
-This changes display gamma briefly and restores it. Live tests passed gamma write/readback/restoration and delivery of True Tone change notifications. `make check` builds with warnings treated as errors, checks shell syntax, and verifies dormant-state cleanup and detection of reset/invalid gamma tables. A physical lid-close appearance test has not yet been confirmed by the user.
+This changes display gamma briefly and restores it. Live tests passed gamma write/readback/restoration and delivery of True Tone change notifications. `make check` builds with warnings treated as errors, checks shell syntax, and verifies dormant-state cleanup, detection of reset/invalid gamma tables, and that the transition guard stops without further reads.
+
+On 2026-09-06, the user confirmed that the bounded transition guard made the actual lid-close appearance much better than the one-second delayed repair. This is confirmation on the tested setup, not a guarantee of flicker-free behavior on every Mac or display.
 
 Send `SIGUSR1` to the helper for a one-time diagnostic status line (subscription, cache, held-display, notification counts, pending-transition state, and whether the transition guard is active). This adds no periodic wakeups.
 
