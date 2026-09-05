@@ -18,7 +18,7 @@ No administrator access, reboot, network connection, or third-party runtime is r
 ./install.sh
 ```
 
-Keep the lid open for at least three seconds. Close it, allow about one second for the display configuration to settle, then check the appearance. Reopen it to return control to normal True Tone.
+Keep the lid open for at least three seconds. Close it and check the appearance; the cached correction is applied as soon as the lid notification is handled. Reopen it to return control to normal True Tone.
 
 The installer builds the program locally and registers `local.truetone-hold` as a per-user LaunchAgent. Existing unknown installations must be stopped first to prevent two helpers from competing.
 
@@ -28,11 +28,11 @@ The helper has **no polling loop and no repeating timer**:
 
 - **No external monitor:** only the macOS display-reconfiguration callback remains registered. The color client and lid listener are released.
 - **External monitor, lid open:** it listens for True Tone `ColorRamp` changes through the private `BrightnessSystemClient` interface and caches the delivered matrix. There is no scheduled sampling.
-- **Lid closes:** an IOKit clamshell notification stops color subscriptions and triggers a single correction after the display transition settles.
+- **Lid closes:** an IOKit clamshell notification stops color subscriptions and applies the cached correction immediately, without an intentional delay. Completed display-configuration events reapply it immediately if macOS resets gamma during the transition.
 - **Lid opens:** it restores the saved gamma and resumes True Tone notifications.
 - **Display configuration changes:** it reconciles connected monitors and restores or reapplies correction as needed.
 
-A coalesced **one-shot** timer allows a short settling delay after a lid or display event. Between events the helper sleeps. A small resident process is needed to receive connection notifications; dormant does not mean unloaded from memory.
+A coalesced **one-shot** timer allows a short settling delay for open-lid configuration changes only. Lid closure and closed-lid display changes apply the correction immediately. Between events the helper sleeps. A small resident process is needed to receive connection notifications; dormant does not mean unloaded from memory.
 
 The color matrix's row sums describe its effect on neutral white. The helper approximates corresponding encoded RGB gains with an exponent of 1/2.2. It always applies them to the saved baseline, so corrections do not accumulate.
 
@@ -40,7 +40,7 @@ The color matrix's row sums describe its effect on neutral white. The helper app
 
 - This is a white-balance approximation, not colorimetrically exact True Tone. It is unsuitable for color-critical work.
 - The private CoreBrightness read interface may change after a macOS update.
-- A brief return to the default tint can occur during lid closure before the correction is applied.
+- macOS notification delivery and display reconfiguration can still produce a brief transition; immediate event handling does not guarantee a flicker-free hardware transition.
 - The process must observe the lid open before it has a reading to hold. Captures are kept in memory, not persisted across restarts.
 - Other gamma-adjustment applications, HDR behavior, display reconnections, and display-ID changes may affect the result. There is no periodic correction to override changes made by another application. Multiple-display behavior has not been verified.
 - SIGTERM and SIGINT restore gamma; a force kill or crash cannot run cleanup. macOS may reset gamma during a display reconfiguration, but this is not guaranteed.

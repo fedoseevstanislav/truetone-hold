@@ -128,7 +128,9 @@ static void powerChanged(void *refcon, io_service_t service, natural_t message, 
         if (lid() == 1) {
             // Never replace the last open-lid sample with the neutral closing ramp.
             unsubscribe();
-            scheduleReconcile(1.0);
+            if (pending) dispatch_source_cancel(pending);
+            pending = nil;
+            reconcile();
         } else {
             restore(displays());
             scheduleReconcile(0.3);
@@ -239,7 +241,19 @@ static void reconcile(void) {
 static void displayChanged(CGDirectDisplayID display, CGDisplayChangeSummaryFlags flags, void *context) {
     (void)display; (void)context;
     if (flags & kCGDisplayBeginConfigurationFlag) return;
-    dispatch_async(dispatch_get_main_queue(), ^{ scheduleReconcile(0.3); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            if (lid() == 1) {
+                // A completed display transition can reset gamma after the lid
+                // notification. Reapply immediately, without a settling timer.
+                if (pending) dispatch_source_cancel(pending);
+                pending = nil;
+                reconcile();
+            } else {
+                scheduleReconcile(0.3);
+            }
+        }
+    });
 }
 
 static void shutdownHelper(void) {
