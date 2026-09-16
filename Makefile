@@ -1,6 +1,6 @@
 CC = xcrun clang
 CFLAGS = -Wall -Wextra -Werror -O2 -fobjc-arc
-FRAMEWORKS = -framework Foundation -framework CoreGraphics -framework IOKit
+FRAMEWORKS = -framework Foundation -framework AppKit -framework CoreGraphics -framework IOKit
 
 .PHONY: all check clean
 all: build/truetone-hold

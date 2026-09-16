@@ -24,6 +24,8 @@ The installer builds the program locally and registers `local.truetone-hold` as 
 
 ## How it works
 
+The windowless helper initializes AppKit’s WindowServer connection and runs the main Core Foundation event loop so Quartz can deliver display-connection callbacks, including when no monitor was attached at login. Dispatch sources still handle lid events, cleanup, and the short transition guard.
+
 The helper is **dormant between events**, with a bounded guard during lid closure:
 
 - **No external monitor:** only the macOS display-reconfiguration callback remains registered. The color client and lid listener are released.
@@ -69,3 +71,7 @@ Transition logs are local at `~/Library/Logs/TrueToneHold/agent.log`. The helper
 ```
 
 This stops the login helper and removes its LaunchAgent. Program files and logs remain under `~/Library/Application Support/TrueToneHold/` and `~/Library/Logs/TrueToneHold/` for inspection or manual removal.
+
+## Connection detection fix (2026-09-16)
+
+Earlier versions could remain in the no-monitor state after login even when an external display was later connected. The helper used `dispatch_main()` without initializing application event handling, so Quartz display callbacks were not delivered in the observed failure. It now initializes with `NSApplicationLoad()` and services `CFRunLoopRun()`. Display-configuration callbacks are logged for diagnosis. This fix adds no periodic connection polling.

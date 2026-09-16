@@ -17,7 +17,7 @@ xcrun --find clang >/dev/null
 mkdir -p "$app_dir" "$log_dir" "$(dirname "$plist")"
 build_file="$(mktemp "$app_dir/.build.XXXXXX")"
 trap 'rm -f "$build_file"' EXIT
-xcrun clang -O2 -fobjc-arc -framework Foundation -framework CoreGraphics -framework IOKit \
+xcrun clang -O2 -fobjc-arc -framework Foundation -framework AppKit -framework CoreGraphics -framework IOKit \
     "$repo_dir/src/truetone-hold.m" -o "$build_file"
 if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
     launchctl bootout "gui/$(id -u)/$label"

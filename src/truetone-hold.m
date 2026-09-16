@@ -1,6 +1,7 @@
 // Approximate the last True Tone white balance while the lid is closed.
 // CoreBrightness is a private, runtime-loaded read interface.
 #import <Foundation/Foundation.h>
+#import <AppKit/NSApplication.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <IOKit/IOKitLib.h>
 #import <IOKit/pwr_mgt/IOPM.h>
@@ -300,8 +301,9 @@ static void reconcile(void) {
 }
 
 static void displayChanged(CGDirectDisplayID display, CGDisplayChangeSummaryFlags flags, void *context) {
-    (void)display; (void)context;
+    (void)context;
     if (flags & kCGDisplayBeginConfigurationFlag) return;
+    NSLog(@"Display configuration event: display=%u flags=0x%x", display, flags);
     dispatch_async(dispatch_get_main_queue(), ^{
         @autoreleasepool {
             if (lid() == 1) {
@@ -355,6 +357,9 @@ int main(int argc, char **argv) {
             unsubscribe();
             return count ? 0 : 3;
         }
+        // Quartz display callbacks require a WindowServer application connection
+        // and an event-processing run loop, even for this windowless helper.
+        if (!NSApplicationLoad()) return 1;
         if (CGDisplayRegisterReconfigurationCallback(displayChanged, NULL) != kCGErrorSuccess) return 1;
         signal(SIGTERM, SIG_IGN);
         signal(SIGINT, SIG_IGN);
@@ -374,5 +379,6 @@ int main(int argc, char **argv) {
         reconcile();
         NSLog(@"Event-driven helper ready; bounded guard only during lid transitions");
     }
-    dispatch_main();
+    CFRunLoopRun();
+    return 0;
 }
