@@ -24,11 +24,11 @@ The installer builds the program locally and registers `local.truetone-hold` as 
 
 ## How it works
 
-The windowless helper initializes AppKit’s WindowServer connection and runs the main Core Foundation event loop so Quartz can deliver display-connection callbacks, including when no monitor was attached at login. Dispatch sources still handle lid events, cleanup, and the short transition guard.
+The windowless helper runs the full AppKit application event loop (`NSApplication.run`) with Dock activation prohibited. It listens for application screen-parameter changes, Quartz display changes, system wake, and lid events, including when no monitor was attached at login. Dispatch sources still handle lid events, cleanup, and the short transition guard.
 
 The helper is **dormant between events**, with a bounded guard during lid closure:
 
-- **No external monitor:** only the macOS display-reconfiguration callback remains registered. The color client and lid listener are released.
+- **No external monitor:** the color client and cached readings are released. Passive connection, wake, and lid listeners remain; there is no periodic timer. The lid listener lets reopening recover if a connection notification was missed.
 - **External monitor, lid open:** it listens for True Tone `ColorRamp` changes through the private `BrightnessSystemClient` interface and caches the delivered matrix. There is no scheduled sampling.
 - **Lid closes:** an IOKit clamshell notification stops color subscriptions and applies the cached correction immediately, without an intentional delay. A transition guard checks for a macOS gamma reset approximately once per 16.7 ms for at most 1.25 seconds, writing only when necessary. It then stops. Completed closed-lid display-configuration events restart this short guard.
 - **Lid opens:** it restores the saved gamma and resumes True Tone notifications.
@@ -74,4 +74,8 @@ This stops the login helper and removes its LaunchAgent. Program files and logs 
 
 ## Connection detection fix (2026-09-16)
 
-Earlier versions could remain in the no-monitor state after login even when an external display was later connected. The helper used `dispatch_main()` without initializing application event handling, so Quartz display callbacks were not delivered in the observed failure. It now initializes with `NSApplicationLoad()` and services `CFRunLoopRun()`. Display-configuration callbacks are logged for diagnosis. This fix adds no periodic connection polling.
+Earlier versions could remain in the no-monitor state after login even when an external display was later connected. The helper used `dispatch_main()` without initializing application event handling, so Quartz display callbacks were not delivered in the observed failure. The September 16 attempt initialized with `NSApplicationLoad()` and serviced `CFRunLoopRun()`, but the same failure recurred. It was superseded by the fix below. Display-configuration callbacks are logged for diagnosis. This fix adds no periodic connection polling.
+
+## Reconnect recovery fix (2026-09-29)
+
+The previous Core Foundation run loop still left the helper stuck after disconnect/reconnect. The helper now pumps AppKit events with `NSApplication.run`, subscribes to screen-parameter and wake notifications, and retains the passive IOKit lid listener when no monitor is detected. Opening the lid therefore triggers fresh connection detection independently of display callbacks. A regression test checks that dormancy preserves that listener and reopening schedules recovery. Compilation and automated tests passed; physical reconnect verification is still required.

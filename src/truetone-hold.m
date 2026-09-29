@@ -2,6 +2,7 @@
 // CoreBrightness is a private, runtime-loaded read interface.
 #import <Foundation/Foundation.h>
 #import <AppKit/NSApplication.h>
+#import <AppKit/NSWorkspace.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <IOKit/IOKitLib.h>
 #import <IOKit/pwr_mgt/IOPM.h>
@@ -102,6 +103,7 @@ static io_object_t powerNotification;
 static dispatch_source_t pending, transitionGuard, termSource, intSource, statusSource;
 static unsigned long colorEvents;
 static BOOL stopping;
+static id screenObserver, wakeObserver;
 static void reconcile(void);
 static unsigned long transitionChecks;
 static void stopTransitionGuard(void) {
@@ -259,10 +261,11 @@ static void reconcile(void) {
     if (!online.count) {
         stopTransitionGuard();
         unsubscribe();
-        unwatchLid();
+        // Keep the passive lid listener: opening the lid must recover from
+        // a missed display-connection event without periodic polling.
         [samples removeAllObjects];
         [held removeAllObjects];
-        NSLog(@"Dormant: no external display; only display-connection listener remains");
+        NSLog(@"Dormant: no external display; passive connection/lid/wake listeners only");
         return;
     }
     if (!watchLid()) {
@@ -325,6 +328,8 @@ static void shutdownHelper(void) {
     stopTransitionGuard();
     if (pending) dispatch_source_cancel(pending);
     CGDisplayRemoveReconfigurationCallback(displayChanged, NULL);
+    if (screenObserver) [NSNotificationCenter.defaultCenter removeObserver:screenObserver];
+    if (wakeObserver) [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:wakeObserver];
     unsubscribe();
     unwatchLid();
     restore(displays());
@@ -359,7 +364,26 @@ int main(int argc, char **argv) {
         }
         // Quartz display callbacks require a WindowServer application connection
         // and an event-processing run loop, even for this windowless helper.
-        if (!NSApplicationLoad()) return 1;
+        [NSApplication sharedApplication];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        if (!watchLid()) {
+            NSLog(@"Unable to register lid recovery listener");
+            return 1;
+        }
+        screenObserver = [NSNotificationCenter.defaultCenter
+            addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil
+            queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+                (void)note;
+                NSLog(@"Application screen-parameters event");
+                displayChanged(0, 0, NULL);
+            }];
+        wakeObserver = [NSWorkspace.sharedWorkspace.notificationCenter
+            addObserverForName:NSWorkspaceDidWakeNotification object:nil
+            queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+                (void)note;
+                NSLog(@"System wake: refresh connected displays");
+                displayChanged(0, 0, NULL);
+            }];
         if (CGDisplayRegisterReconfigurationCallback(displayChanged, NULL) != kCGErrorSuccess) return 1;
         signal(SIGTERM, SIG_IGN);
         signal(SIGINT, SIG_IGN);
@@ -379,6 +403,8 @@ int main(int argc, char **argv) {
         reconcile();
         NSLog(@"Event-driven helper ready; bounded guard only during lid transitions");
     }
-    CFRunLoopRun();
+    // A bare CFRunLoop services dispatch sources but does not pump AppKit's
+    // WindowServer events. Keep a windowless application event loop running.
+    [NSApp run];
     return 0;
 }
